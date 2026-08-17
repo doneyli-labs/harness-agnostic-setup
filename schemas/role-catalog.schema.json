@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/doneyli-labs/harness-agnostic-setup/schemas/role-catalog.schema.json",
+  "title": "Harness-Agnostic Role Catalog",
+  "description": "Canonical, harness-neutral role catalog. Model/effort/permissions are NOT allowed here; they belong in a per-harness binding.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "roles"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "roles": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["description", "instructions", "mode"],
+        "properties": {
+          "description": { "type": "string", "minLength": 1 },
+          "instructions": { "type": "string", "pattern": "^roles/.+\\.md$" },
+          "mode": { "enum": ["read", "write"] }
+        }
+      }
+    }
+  }
+}

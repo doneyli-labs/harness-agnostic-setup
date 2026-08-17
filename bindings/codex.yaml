@@ -1,0 +1,15 @@
+# Per-harness binding for Codex. Rendered to ~/.codex/agents/<role>.toml.
+# Codex expresses read-only via sandbox_mode, where Claude uses a tools
+# allow-list. Same guarantee, different native mechanic. That is why you render.
+schema_version: 1
+harness: codex
+roles:
+  researcher:
+    model: gpt-5.6-terra
+    reasoning_effort: medium
+    sandbox_mode: read-only
+
+  standard_implementer:
+    model: gpt-5.6-luna
+    reasoning_effort: xhigh
+    sandbox_mode: workspace-write

@@ -1,0 +1,15 @@
+# The Harness-Agnostic Catalog: canonical role definitions.
+# One source of truth. Harness-specific values (model, effort, permissions)
+# live in bindings/, never here. Edit this file and re-render; never hand-edit
+# the generated ~/.claude/agents/*.md or ~/.codex/agents/*.toml files.
+schema_version: 1
+roles:
+  researcher:
+    description: Reads code and docs and returns findings. Never writes.
+    instructions: roles/researcher.md
+    mode: read          # read | write
+
+  standard_implementer:
+    description: Implements a bounded, well-specified change in an assigned worktree.
+    instructions: roles/standard-implementer.md
+    mode: write

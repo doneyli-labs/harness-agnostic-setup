@@ -1,0 +1,15 @@
+# Per-harness binding for Claude Code. Rendered to ~/.claude/agents/<role>.md.
+# Values here are the only thing that changes when you move a role between
+# harnesses. The role's behavior lives in roles/, not here.
+schema_version: 1
+harness: claude
+roles:
+  researcher:
+    model: claude-sonnet-5
+    effort: medium
+    permission_mode: plan          # rendered as `permissionMode` (camelCase)
+
+  standard_implementer:
+    model: claude-sonnet-5
+    effort: high
+    permission_mode: acceptEdits
