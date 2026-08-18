@@ -5,6 +5,7 @@ import io
 import os
 import pathlib
 import tempfile
+import types
 import unittest
 from contextlib import ExitStack
 from unittest import mock
@@ -298,5 +299,202 @@ class ValidationAndLedgerTests(unittest.TestCase):
             real_close(descriptor)
 
 
+class DescriptorWalkTests(unittest.TestCase):
+    def setUp(self):
+        self.root = pathlib.Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        self.final = self.root / "alpha" / "beta"
+        self.final.mkdir(parents=True)
+    def changed(self, metadata):
+        return types.SimpleNamespace(st_dev=metadata.st_dev, st_ino=metadata.st_ino + 1, st_mode=metadata.st_mode)
+    def expected(self, path):
+        parts = pathlib.Path(path).parts
+        return tuple(audit._identity(os.stat(pathlib.Path(*parts[:index]))) for index in range(1, len(parts) + 1))
+    def test_validation_precedes_anchor_and_each_dirfd_api_syscall(self):
+        bad_paths = ("private/../secret", "private/\ud800/secret")
+        bad_names = ("", ".", "..", os.sep, "bad\x00", "bad\u200b", "bad\ud800")
+        with mock.patch.object(audit.os, "open") as opened, mock.patch.object(audit.os, "stat") as stated, \
+                mock.patch.object(audit.os, "fstat") as fstated, mock.patch.object(audit.os, "close") as closed:
+            for path in bad_paths:
+                self.assertRaises(audit.OperationalError, audit._open_path, path)
+            apis = ((audit._stat_at, (9,)), (audit._open_dir_at, (audit.FdLedger(), 9)))
+            for function, prefix in apis:
+                for name in bad_names:
+                    self.assertRaises(audit.OperationalError, function, *prefix, name)
+            with mock.patch.object(audit.os, "altsep", "\\"):
+                for function, prefix in apis:
+                    self.assertRaises(audit.OperationalError, function, *prefix, "a\\b")
+        for function in (opened, stated, fstated, closed):
+            function.assert_not_called()
+    def test_valid_calls_walk_order_flags_dirfds_and_identity_trails(self):
+        real_open, calls = audit.os.open, []
+        def opening(name, flags, *args, **kwargs):
+            fd = real_open(name, flags, *args, **kwargs)
+            calls.append((name, flags, kwargs.get("dir_fd"), fd))
+            return fd
+        with mock.patch.object(audit.os, "open", side_effect=opening):
+            descriptor, trail = audit._open_path(str(self.final))
+        self.assertEqual(trail, self.expected(self.final))
+        self.assertEqual([call[0] for call in calls], [os.sep, *self.final.parts[1:]])
+        for index, (_, flags, dirfd, _) in enumerate(calls):
+            self.assertTrue(flags & os.O_DIRECTORY and flags & os.O_NOFOLLOW)
+            self.assertFalse(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT))
+            self.assertEqual(dirfd, None if index == 0 else calls[index - 1][3])
+        os.close(descriptor)
+        previous = os.getcwd()
+        self.addCleanup(os.chdir, previous)
+        os.chdir(self.root)
+        calls.clear()
+        with mock.patch.object(audit.os, "open", side_effect=opening):
+            descriptor, trail = audit._open_path("alpha/beta")
+        self.assertEqual(([call[0] for call in calls], trail[0]), ([".", "alpha", "beta"], audit._identity(os.stat(self.root))))
+        self.assertEqual(trail[-1], audit._identity(os.fstat(descriptor)))
+        os.close(descriptor)
+    def test_ownership_is_immediate_and_parent_survives_post_stat(self):
+        metadata = types.SimpleNamespace(st_dev=1, st_ino=2, st_mode=0o040755)
+        root_ledger = audit.FdLedger()
+        with mock.patch.object(audit.os, "open", return_value=30), \
+                mock.patch.object(audit.os, "fstat", side_effect=lambda fd: (self.assertIn(fd, root_ledger.owned) or metadata)):
+            self.assertEqual(audit._open_path(os.sep, root_ledger), (30, ((1, 2),)))
+        ledger, stat_calls = audit.FdLedger(), 0
+        ledger.own(10)
+        def statting(parent, name):
+            nonlocal stat_calls
+            stat_calls += 1
+            if stat_calls == 2:
+                self.assertEqual(ledger.owned, (10, 20))
+            return metadata
+        with mock.patch.object(audit, "_stat_at", side_effect=statting), \
+                mock.patch.object(audit.os, "open", return_value=20), \
+                mock.patch.object(audit.os, "fstat", side_effect=lambda fd: (
+                    self.assertEqual(ledger.owned, (10, 20)) or metadata)):
+            self.assertEqual(audit._open_dir_at(ledger, 10, "child"), (20, (1, 2)))
+    def test_actual_pre_open_and_open_post_swaps_are_rejected(self):
+        for boundary in ("pre-open", "open-post"):
+            path = self.root / boundary / "swap" / "leaf"
+            path.mkdir(parents=True)
+            moved, real_open, real_stat = False, audit.os.open, audit._stat_at
+            def opening(name, flags, *args, **kwargs):
+                nonlocal moved
+                parent = kwargs.get("dir_fd")
+                if boundary == "pre-open" and name == "swap" and not moved:
+                    os.rename(name, "old", src_dir_fd=parent, dst_dir_fd=parent)
+                    os.mkdir(name, dir_fd=parent)
+                    moved = True
+                return real_open(name, flags, *args, **kwargs)
+            def statting(parent, name):
+                nonlocal moved
+                if boundary == "open-post" and name == "swap" and not moved \
+                        and getattr(statting, "seen", False):
+                    os.rename(name, "old", src_dir_fd=parent, dst_dir_fd=parent)
+                    os.mkdir(name, dir_fd=parent)
+                    moved = True
+                statting.seen = name == "swap" or getattr(statting, "seen", False)
+                return real_stat(parent, name)
+            with mock.patch.object(audit.os, "open", side_effect=opening), \
+                    mock.patch.object(audit, "_stat_at", side_effect=statting):
+                self.assertRaisesRegex(audit.OperationalError, "^PATH_RACE$", audit._open_path, str(path))
+    def test_simulated_pre_open_post_identities_are_rejected(self):
+        for phase in ("pre", "open", "post"):
+            path = self.root / ("sim-" + phase) / "swap" / "leaf"
+            path.mkdir(parents=True)
+            calls, captured = 0, set()
+            real_stat, real_open, real_fstat = audit._stat_at, audit.os.open, audit.os.fstat
+            def statting(parent, name):
+                nonlocal calls
+                metadata = real_stat(parent, name)
+                if name == "swap":
+                    calls += 1
+                    if (phase, calls) in (("pre", 1), ("post", 2)):
+                        return self.changed(metadata)
+                return metadata
+            def opening(name, flags, *args, **kwargs):
+                fd = real_open(name, flags, *args, **kwargs)
+                if name == "swap":
+                    captured.add(fd)
+                return fd
+            def fstatting(fd):
+                metadata = real_fstat(fd)
+                return self.changed(metadata) if phase == "open" and fd in captured else metadata
+            with mock.patch.object(audit, "_stat_at", side_effect=statting), \
+                    mock.patch.object(audit.os, "open", side_effect=opening), \
+                    mock.patch.object(audit.os, "fstat", side_effect=fstatting):
+                self.assertRaisesRegex(audit.OperationalError, "^PATH_RACE$", audit._open_path, str(path))
+    def test_supplied_symlink_is_path_safe_without_readlink(self):
+        link = self.root / "link"
+        link.symlink_to("alpha")
+        for readlink in (None, mock.Mock(side_effect=AssertionError("forbidden"))):
+            ledger = audit.FdLedger()
+            with mock.patch.object(audit.os, "readlink", readlink):
+                with self.assertRaises(audit.OperationalError) as error:
+                    audit._open_path(str(link), ledger)
+            self.assertEqual(str(error.exception), "PATH_UNSAFE")
+            self.assertEqual(ledger.owned, ())
+            if isinstance(readlink, mock.Mock):
+                readlink.assert_not_called()
+    def test_fstat_path_and_primitive_failures_are_safe_and_clean(self):
+        real_fstat = audit.os.fstat
+        for failure_call in (1, 2):
+            calls, ledger = 0, audit.FdLedger()
+            def failing(fd):
+                nonlocal calls
+                calls += 1
+                if calls == failure_call:
+                    raise OSError("sensitive/path")
+                return real_fstat(fd)
+            with mock.patch.object(audit.os, "fstat", side_effect=failing):
+                with self.assertRaises(audit.OperationalError) as error:
+                    audit._open_path(str(self.final), ledger)
+            self.assertEqual(str(error.exception), "PATH_UNSAFE")
+            self.assertEqual(ledger.owned, ())
+        nondir = self.root / "file"
+        nondir.write_text("fixture", encoding="utf-8")
+        for path in (self.root / "missing", nondir,
+                     pathlib.Path(str(self.final) + "/bad\ud800")):
+            with self.assertRaises(audit.OperationalError) as error:
+                audit._open_path(str(path))
+            self.assertEqual(str(error.exception), "PATH_UNSAFE")
+        with mock.patch.object(audit.os, "stat", side_effect=OSError("sensitive/path")):
+            with self.assertRaises(audit.OperationalError) as error:
+                audit._stat_at(9, "safe")
+        self.assertEqual(str(error.exception), "PATH_UNSAFE")
+        with mock.patch.object(audit, "_stat_at", return_value=os.stat(self.root)), \
+                mock.patch.object(audit.os, "open", side_effect=OSError("sensitive/path")):
+            with self.assertRaises(audit.OperationalError) as error:
+                audit._open_dir_at(audit.FdLedger(), 9, "safe")
+        self.assertEqual(str(error.exception), "PATH_UNSAFE")
+    def test_close_failure_integration_and_prior_precedence(self):
+        for prior_code in (None, "PATH_RACE"):
+            ledger, real_close = audit.FdLedger(), os.close
+            failed = []
+            def closing(fd):
+                if not failed:
+                    failed.append(fd)
+                    raise OSError("state unknown")
+                real_close(fd)
+            patches = [mock.patch.object(audit.os, "close", side_effect=closing)]
+            if prior_code:
+                patches.append(mock.patch.object(
+                    audit, "_open_dir_at", side_effect=audit.OperationalError(prior_code)))
+            try:
+                with patches[0]:
+                    with patches[1] if prior_code else contextlib.nullcontext():
+                        with self.assertRaises(audit.OperationalError) as error:
+                            audit._open_path(str(self.final), ledger)
+                self.assertEqual(str(error.exception), prior_code or "FD_CLOSE_FAILED")
+                self.assertEqual((ledger.owned, ledger.failed), (tuple(failed),) * 2)
+            finally:
+                for fd in ledger.owned:
+                    real_close(fd)
+    def test_returned_descriptor_and_trail_survive_path_replacement(self):
+        descriptor, trail = audit._open_path(str(self.final))
+        original, moved = trail[-1], self.final.with_name("beta-old")
+        self.final.rename(moved)
+        self.final.mkdir()
+        try:
+            self.assertEqual(audit._identity(os.fstat(descriptor)), original)
+            self.assertNotEqual(audit._identity(os.stat(self.final)), original)
+            self.assertEqual(trail, self.expected(moved))
+        finally:
+            os.close(descriptor)
 if __name__ == "__main__":
     unittest.main()

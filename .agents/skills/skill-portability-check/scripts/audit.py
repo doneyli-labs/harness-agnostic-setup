@@ -2,6 +2,7 @@
 """Fail-closed command shell for the skill portability auditor."""
 import argparse
 import os
+import stat
 import sys
 import unicodedata
 
@@ -50,6 +51,18 @@ class FdLedger:
             raise OperationalError("FD_CLOSE_FAILED")
         self._owned.remove(fd)
         return fd
+
+    def close(self, fd):
+        if fd not in self._owned:
+            raise OperationalError("FD_OWNERSHIP")
+        if fd in self._failed:
+            raise OperationalError("FD_CLOSE_FAILED")
+        try:
+            os.close(fd)
+        except OSError:
+            self._failed.add(fd)
+            raise OperationalError("FD_CLOSE_FAILED") from None
+        self._owned.remove(fd)
 
     def cleanup(self, prior=None):
         for fd in self._owned[::-1]:
@@ -116,6 +129,58 @@ def _path_plan(path):
     for component in components:
         _safe_basename(component)
     return (os.sep if absolute else "."), components
+
+
+def _identity(metadata):
+    return metadata.st_dev, metadata.st_ino
+
+
+def _stat_at(parent, name):
+    name = _safe_basename(name)
+    try:
+        return os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except (OSError, UnicodeError, ValueError):
+        raise OperationalError("PATH_UNSAFE") from None
+
+
+def _open_dir_at(ledger, parent, name):
+    name = _safe_basename(name)
+    before = _stat_at(parent, name)
+    if not stat.S_ISDIR(before.st_mode):
+        raise OperationalError("PATH_UNSAFE")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        child = ledger.own(os.open(name, flags, dir_fd=parent))
+        opened = os.fstat(child)
+    except (OSError, UnicodeError, ValueError):
+        raise OperationalError("PATH_UNSAFE") from None
+    after = _stat_at(parent, name)
+    identities = {_identity(before), _identity(opened), _identity(after)}
+    if not stat.S_ISDIR(opened.st_mode) or len(identities) != 1:
+        raise OperationalError("PATH_RACE")
+    return child, _identity(opened)
+
+
+def _open_path(path, ledger=None):
+    anchor, components = _path_plan(path)
+    owner = FdLedger() if ledger is None else ledger
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        current = owner.own(os.open(anchor, flags))
+        metadata = os.fstat(current)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise OperationalError("PATH_UNSAFE")
+        trail = [_identity(metadata)]
+        for component in components:
+            child, identity = _open_dir_at(owner, current, component)
+            owner.close(current)
+            current = child
+            trail.append(identity)
+        return owner.release(current), tuple(trail)
+    except OperationalError as error:
+        owner.cleanup(error)
+    except (OSError, UnicodeError, ValueError):
+        owner.cleanup(OperationalError("PATH_UNSAFE"))
 
 
 def _parser():
