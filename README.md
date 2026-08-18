@@ -1,13 +1,20 @@
 # Harness-Agnostic Agent Setup
 
+**Claude unavailable and need to continue now?** Follow the
+[quick-port guide](quick-port/) to import supported setup and recent work,
+finish required setup, audit eligible skill text, and test one workflow safely.
+
+**Want one durable source of truth?** Use the catalog, schema, and per-harness
+bindings in this repository to define roles once and render each native shape.
+
 A copy-pasteable template for defining an AI coding agent **once** and running it
 in more than one harness (Claude Code, Codex, and anything you add next).
 
 This is the build-along companion to the *Signal over Noise* issue
 **"I Compile My AI Agents. I Don't Copy Them."** It ships the shape, not the
 private machinery: the canonical catalog, the per-harness bindings, and the
-schema. The renderer, installer, and drift doctor described in the issue stay in
-a private repo. You have everything here to build your own.
+schema. The compiler/renderer, installer, and drift doctor described in the
+issue stay in a private repo. You have everything here to build your own.
 
 ## The idea in one line
 
@@ -24,6 +31,9 @@ roles.yaml + roles/<role>.md            (canonical: behavior + instructions, har
 ```
 
 ## What's in here
+
+The template is populated with two roles: `researcher` and
+`standard_implementer`.
 
 ```
 roles.yaml                     canonical role catalog (source of truth)
@@ -78,6 +88,9 @@ Two things worth adding once it works:
 The values in `bindings/` are illustrative and current as of mid-2026
 (`claude-sonnet-5`, `gpt-5.6-terra`, `gpt-5.6-luna`). Harness model names move
 fast. Swap in whatever your harness supports.
+
+For the implementation notes behind this kit, subscribe to
+[Signal over Noise](https://doneyli.substack.com/subscribe).
 
 ## License
 
