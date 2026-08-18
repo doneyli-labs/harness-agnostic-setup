@@ -34,7 +34,7 @@ class CapabilityGateTests(unittest.TestCase):
         self.assertTrue(audit._capable())
 
     def test_each_required_primitive_is_individually_blocking(self):
-        names = ("open", "stat", "readlink", "link", "unlink", "scandir",
+        names = ("open", "stat", "link", "unlink", "scandir",
                  "fstat", "fsync", "getuid")
         for name in names:
             with self.subTest(name=name), mock.patch.object(audit.os, name, None):
@@ -47,7 +47,7 @@ class CapabilityGateTests(unittest.TestCase):
     def test_each_required_capability_membership_is_blocking(self):
         cases = (
             ("supports_dir_fd", "open"), ("supports_dir_fd", "stat"),
-            ("supports_dir_fd", "readlink"), ("supports_dir_fd", "link"),
+            ("supports_dir_fd", "link"),
             ("supports_dir_fd", "unlink"), ("supports_fd", "scandir"),
             ("supports_follow_symlinks", "stat"),
             ("supports_follow_symlinks", "link"),
@@ -88,7 +88,7 @@ class CapabilityGateTests(unittest.TestCase):
                 load_module("audit_unrelated_import_failure")
 
     def test_unsupported_gate_is_exact_and_precedes_later_work(self):
-        names = ("open", "stat", "readlink", "link", "unlink", "scandir",
+        names = ("open", "stat", "link", "unlink", "scandir",
                  "fstat", "fsync", "getuid", "mkdir", "rename", "replace")
         with tempfile.TemporaryDirectory() as temporary:
             output = pathlib.Path(temporary) / "secret-output"
@@ -111,7 +111,7 @@ class CapabilityGateTests(unittest.TestCase):
         file_open.assert_not_called()
 
     def test_supported_gate_does_not_access_home_paths_or_output(self):
-        names = ("open", "stat", "readlink", "link", "unlink", "scandir",
+        names = ("open", "stat", "link", "unlink", "scandir",
                  "fstat", "fsync", "getuid")
         originals = {name: getattr(audit.os, name) for name in names}
         observed = {name: mock.Mock(wraps=function)
@@ -123,7 +123,7 @@ class CapabilityGateTests(unittest.TestCase):
                     stack.enter_context(mock.patch.object(audit.os, name, function))
                 stack.enter_context(mock.patch.object(
                     audit.os, "supports_dir_fd",
-                    {observed[name] for name in ("open", "stat", "readlink", "link", "unlink")}))
+                    {observed[name] for name in ("open", "stat", "link", "unlink")}))
                 stack.enter_context(mock.patch.object(
                     audit.os, "supports_fd", {observed["scandir"]}))
                 stack.enter_context(mock.patch.object(
@@ -149,15 +149,23 @@ class CapabilityGateTests(unittest.TestCase):
             [], ["--source"], ["--source", "private", "--format", "yaml"],
             ["--source", "private", "--unknown", "private-value"],
             ["--target", "private"], ["--source", "private", "--output"],
-            ["--sou", "private"], ["--source", "private", "--fo", "json"],
-            ["--source", "private", "--sh"],
-            ["--source", "private", "--out", "private"],
         )
         for argv in invalid:
             with self.subTest(argv=argv):
                 result = self.run_main(argv=argv)
                 self.assertEqual(result, (2, "", "CLI_INVALID\n"))
                 self.assertNotIn("private", result[2])
+                self.assertNotIn("Traceback", result[2])
+        options = ("--source", "--target", "--format", "--show-paths", "--output")
+        prefixes = tuple((option, option[:length]) for option in options
+                         for length in range(3, len(option)))
+        self.assertEqual(len(prefixes), 29)
+        for option, prefix in prefixes:
+            argv = [] if option == "--source" else ["--source", "private-source"]
+            argv += [prefix] if option == "--show-paths" else [prefix, "private-value"]
+            with self.subTest(option=option, prefix=prefix):
+                result = self.run_main(argv=argv)
+                self.assertEqual(result, (2, "", "CLI_INVALID\n"))
                 self.assertNotIn("Traceback", result[2])
         for output_format in ("markdown", "json"):
             with self.subTest(output_format=output_format):

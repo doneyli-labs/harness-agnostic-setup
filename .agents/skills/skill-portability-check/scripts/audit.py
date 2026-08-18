@@ -27,13 +27,13 @@ def _member(function, capability):
 
 def _capable():
     functions = {name: getattr(os, name, None) for name in
-                 ("open", "stat", "readlink", "link", "unlink", "scandir")}
+                 ("open", "stat", "link", "unlink", "scandir")}
     dir_fd = getattr(os, "supports_dir_fd", ()) or ()
     fd = getattr(os, "supports_fd", ()) or ()
     follow = getattr(os, "supports_follow_symlinks", ()) or ()
     return (
         all(_member(functions[name], dir_fd)
-            for name in ("open", "stat", "readlink", "link", "unlink"))
+            for name in ("open", "stat", "link", "unlink"))
         and _member(functions["scandir"], fd)
         and all(_member(functions[name], follow) for name in ("stat", "link"))
         and callable(getattr(os, "fstat", None))
