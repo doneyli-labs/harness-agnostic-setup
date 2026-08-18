@@ -31,7 +31,7 @@ paths.
 | `META004` | blocked | A name is duplicated, so matching is ambiguous. | Give each skill a unique stable name. |
 | `PATH001` | review | A provider-specific skill or agent path appears. | Replace it with an explicit portable input. |
 | `PATH002` | review | A user-specific absolute path appears. | Replace it with a supplied relative or explicit path. |
-| `PATH003` | review | An in-root symbolic link was skipped. | Audit an authorized real directory separately. |
+| `PATH003` | review | A symbolic link was skipped; its target and containment are unknown. | Audit an authorized real directory separately; do not infer where the link points. |
 | `RUNTIME001` | review | A provider-specific runtime binding appears. | Replace or document the Codex equivalent. |
 | `HOOK001` | review | A provider hook lifecycle token appears. | Review the hook against Codex behavior. |
 | `ARGS001` | review | Argument or command interpolation appears. | Replace it with explicit validated input. |
