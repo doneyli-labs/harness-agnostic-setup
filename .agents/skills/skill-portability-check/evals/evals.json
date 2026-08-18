@@ -1,0 +1,40 @@
+{
+  "skill_name": "skill-portability-check",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I imported a set of mostly portable skills and want a pre-switch check. Audit only the already-created synthetic directories SOURCE_ROOT: /tmp/skill-portability-evals/portable/source and TARGET_ROOT: /tmp/skill-portability-evals/portable/target. Keep paths and content hidden, make no writes or connections, and stop before invoking anything. Tell me the smallest follow-up and suggest a local known-output smoke test.",
+      "expected_output": "A read-only source-to-target audit using the deterministic script, with opaque IDs, pathless findings, bounded status language, a minimal follow-up, and one unexecuted synthetic local smoke-test recommendation.",
+      "files": [],
+      "expectations": [
+        "Uses only the two explicit roots and runs scripts/audit.py without --output or --show-paths.",
+        "Returns opaque skill/file IDs and does not expose an absolute root, source excerpt, matched value, environment value, or digest.",
+        "Defines portable only as no findings plus complete eligible coverage, not as a runtime guarantee.",
+        "Recommends but does not run one local no-network, no-auth, side-effect-free known-output smoke test."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Before I rely on these imported skills, audit only SOURCE_ROOT: /tmp/skill-portability-evals/dependencies/source. The synthetic fixture contains hook lifecycle, argument interpolation, and sign-in-dependent connection assumptions. I need a content-redacted report and the smallest manual fix for each finding. Do not inspect my home directory, write a report file, authenticate, or run a skill.",
+      "expected_output": "A pathless read-only audit that reports the relevant hook, argument, connection, and sensitive-material finding codes without excerpts, then stops before changes or live use.",
+      "files": [],
+      "expectations": [
+        "Runs the auditor with only the explicit source root and without a target, --output, or --show-paths.",
+        "Reports no comparison code and states that no source-to-target comparison occurred.",
+        "Summarizes HOOK001, ARGS001, CONN001, and any other auditor-emitted codes without reproducing matched content or paths.",
+        "Provides only manual fixes and stops before edits, sign-in, connections, hooks, or imported-tool invocation."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Create a brand-new Codex skill for generating weekly engineering release notes from merged pull requests. Help me choose its trigger description, instruction structure, and three test prompts; there are no imported skill directories to audit.",
+      "expected_output": "The portability-check skill does not trigger; the response follows a new-skill creation workflow and does not request roots or run the auditor.",
+      "files": [],
+      "expectations": [
+        "Does not invoke skill-portability-check or scripts/audit.py.",
+        "Does not ask for SOURCE_ROOT or TARGET_ROOT.",
+        "Treats the request as new-skill creation rather than an import, compatibility, or pre-switch audit."
+      ]
+    }
+  ]
+}
