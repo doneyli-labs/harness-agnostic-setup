@@ -183,6 +183,63 @@ def _open_path(path, ledger=None):
         owner.cleanup(OperationalError("PATH_UNSAFE"))
 
 
+def _labeled(label, error):
+    return OperationalError(f"<{label}> {error}")
+
+
+def _home_path():
+    try:
+        home = pwd.getpwuid(os.getuid()).pw_dir
+    except (AttributeError, KeyError, OSError):
+        raise OperationalError("<home> PATH_UNSAFE") from None
+    if not isinstance(home, str) or not os.path.isabs(home):
+        raise OperationalError("<home> PATH_UNSAFE")
+    return home
+
+
+def _open_input(label, path, ledger):
+    try:
+        descriptor, trail = _open_path(path, ledger)
+        ledger.own(descriptor)
+        return descriptor, trail
+    except OperationalError as error:
+        raise _labeled(label, error) from None
+
+
+def _close_inputs(ledger, records):
+    reason = None
+    for label, descriptor, _ in reversed(records):
+        try:
+            ledger.close(descriptor)
+        except OperationalError as error:
+            if reason is None:
+                reason = _labeled(label, error)
+    if reason is not None:
+        ledger.cleanup(reason)
+
+
+def _input_preflight(args, ledger=None):
+    owner = FdLedger() if ledger is None else ledger
+    records = []
+    try:
+        home = _open_input("home", _home_path(), owner)
+        records.append(("home", *home))
+        if home[1][-1] == home[1][0]:
+            raise OperationalError("<home> PATH_UNSAFE")
+        source = _open_input("source", args.source, owner)
+        records.append(("source", *source))
+        if args.target is not None:
+            target = _open_input("target", args.target, owner)
+            records.append(("target", *target))
+        guarded = set(home[1])
+        for label, _, trail in records[1:]:
+            if trail[-1] in guarded:
+                raise OperationalError(f"<{label}> PATH_UNSAFE")
+    except OperationalError as error:
+        owner.cleanup(error)
+    _close_inputs(owner, records)
+
+
 def _parser():
     parser = SafeParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--source", required=True)
@@ -198,9 +255,10 @@ PARSER = _parser()
 
 def main(argv=None):
     try:
-        PARSER.parse_args(argv)
+        args = PARSER.parse_args(argv)
         if not _capable():
             raise OperationalError("SAFE_IO_UNAVAILABLE")
+        _input_preflight(args)
         raise OperationalError("AUDIT_INCOMPLETE")
     except OperationalError as error:
         sys.stderr.write(f"{error}\n")

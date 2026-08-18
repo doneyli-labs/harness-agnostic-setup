@@ -6,11 +6,13 @@ from cases_foundation import (
     DescriptorWalkTests,
     ValidationAndLedgerTests,
 )
+from cases_input_policy import InputPolicyTests
 
 __all__ = (
     "CapabilityGateTests",
     "DescriptorWalkTests",
     "ValidationAndLedgerTests",
+    "InputPolicyTests",
 )
 
 
