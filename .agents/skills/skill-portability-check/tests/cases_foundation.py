@@ -129,10 +129,10 @@ class CapabilityGateTests(unittest.TestCase):
                     audit.os, "supports_fd", {observed["scandir"]}))
                 stack.enter_context(mock.patch.object(
                     audit.os, "supports_follow_symlinks", {observed["stat"], observed["link"]}))
+                stack.enter_context(mock.patch.object(audit, "_input_preflight", create=True))
                 home = stack.enter_context(mock.patch.object(audit.pwd, "getpwuid"))
                 file_open = stack.enter_context(mock.patch("builtins.open"))
-                mutators = [stack.enter_context(mock.patch.object(audit.os, name))
-                            for name in ("mkdir", "rename", "replace")]
+                mutators = [stack.enter_context(mock.patch.object(audit.os, name)) for name in ("mkdir", "rename", "replace")]
                 result = self.run_main(argv=[
                     "--source", str(root / "source"), "--target", str(root / "target"),
                     "--format", "json", "--show-paths", "--output", str(output)])
@@ -170,9 +170,9 @@ class CapabilityGateTests(unittest.TestCase):
                 self.assertNotIn("Traceback", result[2])
         for output_format in ("markdown", "json"):
             with self.subTest(output_format=output_format):
-                with mock.patch.object(audit, "_capable", return_value=True):
-                    result = self.run_main(argv=["--source", "private",
-                                                 "--format", output_format])
+                with mock.patch.object(audit, "_capable", return_value=True), \
+                        mock.patch.object(audit, "_input_preflight", create=True):
+                    result = self.run_main(argv=["--source", "private", "--format", output_format])
                 self.assertEqual(result, (2, "", "AUDIT_INCOMPLETE\n"))
 
 
