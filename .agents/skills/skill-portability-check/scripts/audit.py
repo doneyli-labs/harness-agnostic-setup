@@ -3,6 +3,7 @@
 import argparse
 import os
 import sys
+import unicodedata
 
 try:
     import pwd
@@ -19,6 +20,51 @@ class OperationalError(RuntimeError):
 class SafeParser(argparse.ArgumentParser):
     def error(self, message):
         raise OperationalError("CLI_INVALID")
+
+
+class FdLedger:
+    """Ordered ownership record; failed closes remain owned and uncertain."""
+
+    def __init__(self):
+        self._owned = []
+        self._failed = set()
+
+    @property
+    def owned(self):
+        return tuple(self._owned)
+
+    @property
+    def failed(self):
+        return tuple(fd for fd in self._owned if fd in self._failed)
+
+    def own(self, fd):
+        if fd in self._owned:
+            raise OperationalError("FD_OWNERSHIP")
+        self._owned.append(fd)
+        return fd
+
+    def release(self, fd):
+        if fd not in self._owned:
+            raise OperationalError("FD_OWNERSHIP")
+        if fd in self._failed:
+            raise OperationalError("FD_CLOSE_FAILED")
+        self._owned.remove(fd)
+        return fd
+
+    def cleanup(self, prior=None):
+        for fd in self._owned[::-1]:
+            if fd in self._failed:
+                continue
+            try:
+                os.close(fd)
+            except OSError:
+                self._failed.add(fd)
+            else:
+                self._owned.remove(fd)
+        if prior is not None:
+            raise prior
+        if self._failed:
+            raise OperationalError("FD_CLOSE_FAILED")
 
 
 def _member(function, capability):
@@ -44,6 +90,32 @@ def _capable():
         and callable(getattr(pwd, "getpwuid", None))
         and callable(getattr(os, "getuid", None))
     )
+
+
+def _unsafe_unicode(value):
+    return (not isinstance(value, str)
+            or any(unicodedata.category(char) in ("Cc", "Cf", "Cs")
+                   for char in value))
+
+
+def _safe_basename(name):
+    separators = (os.sep,) if os.altsep is None else (os.sep, os.altsep)
+    if (_unsafe_unicode(name) or name in ("", ".", "..")
+            or any(separator in name for separator in separators)):
+        raise OperationalError("PATH_UNSAFE")
+    return name
+
+
+def _path_plan(path):
+    if _unsafe_unicode(path) or not path:
+        raise OperationalError("PATH_UNSAFE")
+    normalized = path.replace(os.altsep, os.sep) if os.altsep else path
+    absolute = os.path.isabs(normalized)
+    remainder = normalized[len(os.sep):] if absolute else normalized
+    components = () if absolute and not remainder else tuple(remainder.split(os.sep))
+    for component in components:
+        _safe_basename(component)
+    return (os.sep if absolute else "."), components
 
 
 def _parser():

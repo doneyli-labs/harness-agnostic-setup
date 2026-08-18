@@ -175,5 +175,128 @@ class CapabilityGateTests(unittest.TestCase):
                 self.assertEqual(result, (2, "", "AUDIT_INCOMPLETE\n"))
 
 
+class ValidationAndLedgerTests(unittest.TestCase):
+    def test_invalid_paths_and_basenames_make_zero_filesystem_calls(self):
+        paths = ("", ".", "..", "a//b", "a/../b", "a/\x1f/b",
+                 "a/\u200b/b", "a/\ud800/b")
+        names = ("", ".", "..", os.sep, f"a{os.sep}b", "bad\x1f",
+                 "bad\u200b", "bad\ud800")
+        api_names = ("open", "stat", "fstat", "readlink", "scandir", "getcwd")
+        with ExitStack() as stack:
+            observed = [stack.enter_context(mock.patch.object(audit.os, name))
+                        for name in api_names]
+            for path in paths:
+                with self.subTest(kind="path", value=repr(path)):
+                    self.assertRaises(audit.OperationalError, audit._path_plan, path)
+            for name in names:
+                with self.subTest(kind="basename", value=repr(name)):
+                    self.assertRaises(audit.OperationalError, audit._safe_basename, name)
+            with mock.patch.object(audit.os, "altsep", "\\"):
+                for name in ("\\", "a\\b"):
+                    self.assertRaises(audit.OperationalError,
+                                      audit._safe_basename, name)
+                for path in ("a\\..\\b", "a\\\\b"):
+                    self.assertRaises(audit.OperationalError,
+                                      audit._path_plan, path)
+        for function in observed:
+            function.assert_not_called()
+
+    def test_valid_absolute_relative_and_altsep_plans_preserve_order(self):
+        api_names = ("open", "stat", "fstat", "readlink", "scandir", "getcwd")
+        with ExitStack() as stack:
+            observed = [stack.enter_context(mock.patch.object(audit.os, name))
+                        for name in api_names]
+            self.assertEqual(audit._path_plan("/alpha/beta"),
+                             (os.sep, ("alpha", "beta")))
+            self.assertEqual(audit._path_plan("alpha/beta"),
+                             (".", ("alpha", "beta")))
+            self.assertEqual(audit._path_plan(os.sep), (os.sep, ()))
+            with mock.patch.object(audit.os, "altsep", "\\"):
+                self.assertEqual(audit._path_plan("\\alpha\\beta"),
+                                 (os.sep, ("alpha", "beta")))
+                self.assertEqual(audit._path_plan("alpha\\beta"),
+                                 (".", ("alpha", "beta")))
+        for function in observed:
+            function.assert_not_called()
+
+    def test_ledger_owns_and_releases_in_explicit_order(self):
+        ledger = audit.FdLedger()
+        self.assertEqual([ledger.own(fd) for fd in (11, 12, 13)], [11, 12, 13])
+        self.assertEqual(ledger.owned, (11, 12, 13))
+        self.assertEqual(ledger.release(12), 12)
+        self.assertEqual(ledger.owned, (11, 13))
+        self.assertEqual(ledger.failed, ())
+
+    def test_duplicate_ownership_and_unknown_release_do_not_change_state(self):
+        ledger = audit.FdLedger()
+        ledger.own(11)
+        with self.assertRaises(audit.OperationalError) as duplicate:
+            ledger.own(11)
+        self.assertEqual(str(duplicate.exception), "FD_OWNERSHIP")
+        self.assertEqual(ledger.owned, (11,))
+        with self.assertRaises(audit.OperationalError) as unknown:
+            ledger.release(12)
+        self.assertEqual(str(unknown.exception), "FD_OWNERSHIP")
+        self.assertEqual(ledger.owned, (11,))
+
+    def test_successful_cleanup_closes_every_descriptor_once(self):
+        ledger = audit.FdLedger()
+        for fd in (11, 12, 13):
+            ledger.own(fd)
+        with mock.patch.object(audit.os, "close") as close:
+            ledger.cleanup()
+        self.assertEqual([call.args[0] for call in close.call_args_list], [13, 12, 11])
+        self.assertEqual(ledger.owned, ())
+        self.assertEqual(ledger.failed, ())
+
+    def test_multiple_real_close_failures_remain_owned_without_retry(self):
+        descriptors = [os.open(os.devnull, os.O_RDONLY) for _ in range(3)]
+        ledger, real_close = audit.FdLedger(), os.close
+        for fd in descriptors:
+            ledger.own(fd)
+
+        def closing(fd):
+            if fd != descriptors[1]:
+                raise OSError("close state unknown")
+            real_close(fd)
+        try:
+            with mock.patch.object(audit.os, "close", side_effect=closing) as close:
+                with self.assertRaises(audit.OperationalError) as error:
+                    ledger.cleanup()
+                self.assertEqual(str(error.exception), "FD_CLOSE_FAILED")
+                self.assertEqual(ledger.owned, (descriptors[0], descriptors[2]))
+                self.assertEqual(ledger.failed, ledger.owned)
+                self.assertEqual(close.call_count, 3)
+                self.assertRaises(audit.OperationalError, ledger.cleanup)
+                self.assertEqual(close.call_count, 3)
+                state = ledger.owned, ledger.failed
+                with self.assertRaises(audit.OperationalError) as uncertain:
+                    ledger.release(descriptors[0])
+                self.assertEqual(str(uncertain.exception), "FD_CLOSE_FAILED")
+                self.assertEqual((ledger.owned, ledger.failed), state)
+                self.assertEqual(close.call_count, 3)
+        finally:
+            for fd in ledger.owned:
+                real_close(fd)
+
+    def test_prior_operational_error_precedes_close_fallback(self):
+        descriptor = os.open(os.devnull, os.O_RDONLY)
+        ledger, real_close = audit.FdLedger(), os.close
+        ledger.own(descriptor)
+        prior = audit.OperationalError("PATH_UNSAFE")
+        try:
+            with mock.patch.object(audit.os, "close", side_effect=OSError) as close:
+                with self.assertRaises(audit.OperationalError) as error:
+                    ledger.cleanup(prior)
+                self.assertIs(error.exception, prior)
+                self.assertEqual(ledger.owned, (descriptor,))
+                with self.assertRaises(audit.OperationalError) as fallback:
+                    ledger.cleanup()
+                self.assertEqual(str(fallback.exception), "FD_CLOSE_FAILED")
+                self.assertEqual(close.call_count, 1)
+        finally:
+            real_close(descriptor)
+
+
 if __name__ == "__main__":
     unittest.main()
