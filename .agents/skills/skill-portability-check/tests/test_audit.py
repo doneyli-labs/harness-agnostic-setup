@@ -23,6 +23,11 @@ class AuditSafetyTests(unittest.TestCase):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = audit.main(arguments)
         return code, stdout.getvalue(), stderr.getvalue()
+    def skill(self, key, name="skill", description="safe", body=""):
+        folder = self.root if key == "." else self.root / key
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n{body}")
+        return folder
 
     def test_cli_shape_and_path_free_usage_error(self):
         args = audit.parse_args(["--source", str(self.root), "--format", "json", "--show-paths"])
@@ -113,6 +118,107 @@ class AuditSafetyTests(unittest.TestCase):
         result = self.run_main(["--source", str(self.root), "--output", str(output)])
         self.assertEqual(result, (2, "", "<output>: OUTPUT_IN_ROOT\n")); self.assertNotIn(str(output), result[2])
         self.assertFalse(output.exists())
+
+    def test_source_discovery_exclusions_boundaries_and_stability(self):
+        parent, child = self.skill(".", "parent"), self.skill("z-child", "child", body="/.claude/skills/tool")
+        self.skill("a-first", "first"); (parent / "root.md").write_text("safe")
+        for name in audit.EXCLUDED_DIRS:
+            excluded = parent / name; excluded.mkdir(); (excluded / "never.md").write_bytes(b"\xff")
+        (parent / ".env").write_text("secret"); (parent / ".env.local").write_text("secret"); (parent / "tool.rb").write_text("token")
+        (parent / "alias").symlink_to(parent / "root.md")
+        calls, real = [], audit._read_file
+        def tracked(path):
+            calls.append(path)
+            return real(path)
+        with mock.patch.object(audit, "_read_file", side_effect=tracked):
+            results = audit.analyze_source(self.root.resolve())
+        self.assertEqual(results, audit.analyze_source(self.root.resolve()))
+        self.assertEqual([item.key for item in results], [".", "a-first", "z-child"])
+        root_result, child_result = results[0], results[2]
+        root_codes = [item.code for item in root_result.findings]
+        self.assertEqual(root_codes.count("COVERAGE001"), 1); self.assertIn("PATH003", root_codes)
+        self.assertEqual([item.path for item in root_result.files], sorted(item.path for item in root_result.files))
+        self.assertEqual([item.file_id for item in root_result.files], [f"F{number:03d}" for number in range(1, len(root_result.files) + 1)])
+        self.assertEqual(list(root_result.findings), sorted(root_result.findings, key=lambda item: (item.code, item.side, item.path or "")))
+        self.assertNotIn("PATH001", root_codes); self.assertIn("PATH001", [item.code for item in child_result.findings])
+        self.assertIn("vendor", audit.EXCLUDED_DIRS); self.assertNotIn("Vendor", audit.EXCLUDED_DIRS)
+        self.assertFalse(any(set(path.relative_to(parent.resolve()).parts) & audit.EXCLUDED_DIRS or path.name.startswith(".env") or path.suffix == ".rb" for path in calls))
+
+    def test_frontmatter_byte_zero_crlf_and_scalar_rejections(self):
+        valid = self.root / "valid"; valid.mkdir()
+        (valid / "SKILL.md").write_bytes("---\r\nname: 'nai\u0308ve'\r\ndescription: \"hash # allowed\"\r\n---\r\n".encode())
+        cases = {
+            "bom": "\ufeff---\nname: x\ndescription: y\n---\n",
+            "unterminated": "---\nname: x\ndescription: y\n",
+            "empty": "---\nname:\ndescription: y\n---\n",
+            "duplicate": "---\nname: x\nname: y\ndescription: z\n---\n",
+            "multiline": "---\nname: |\ndescription: y\n---\n",
+            "escaped": '---\nname: "a\\b"\ndescription: y\n---\n',
+            "unsupported": "---\nname: [x]\ndescription: y\n---\n",
+            "description": "---\nname: x\ndescription: >\n---\n",
+        }
+        for key, text in cases.items():
+            folder = self.root / key; folder.mkdir(); (folder / "SKILL.md").write_text(text)
+        results = {item.key: item for item in audit.analyze_source(self.root.resolve())}
+        self.assertEqual((results["valid"].name, results["valid"].description, results["valid"].status), ("naïve", "hash # allowed", "portable"))
+        for key in ("bom", "unterminated"):
+            self.assertEqual([item.code for item in results[key].findings], ["META001"])
+        for key in ("empty", "duplicate", "multiline", "escaped", "unsupported"):
+            self.assertIn("META002", [item.code for item in results[key].findings])
+        self.assertIn("META003", [item.code for item in results["description"].findings])
+
+    def test_duplicate_names_case_sensitive_and_status_precedence(self):
+        self.skill("dup-a", "same"); self.skill("dup-b", "same"); self.skill("case", "Same")
+        self.skill("review", "review", body="token"); self.skill("blocked", "", body="token")
+        results = {item.key: item for item in audit.analyze_source(self.root.resolve())}
+        for key in ("dup-a", "dup-b"):
+            self.assertEqual((results[key].status, [item.code for item in results[key].findings].count("META004")), ("blocked", 1))
+        self.assertEqual(results["case"].status, "portable")
+        self.assertEqual((results["review"].status, results["blocked"].status), ("review", "blocked"))
+
+    def test_every_lexical_rule_and_fenced_backticks(self):
+        folder = self.skill(".", "lexical")
+        signal = "/.CLAUDE/skills/x /Users/alice/project/ CLAUDE mcp__claudeTool PreToolUse $ARGUMENTS $( MCPSERVERS AUTHORIZATION HEADERS TRANSPORT ${API_KEY} TOKEN"
+        (folder / "signals.md").write_text(signal); (folder / "lower.md").write_text("pretooluse")
+        (folder / "run.sh").write_text("echo `date`")
+        (folder / "shell.md").write_text("````bash\necho `date`\n````\n")
+        (folder / "ignored.md").write_text("`prose`\n```python\n`code`\n```\n```bash extra\n`no`\n```\n")
+        (folder / "note.txt").write_text("`prose`")
+        result = audit.analyze_source(self.root.resolve())[0]
+        by_path = {}
+        for finding in result.findings:
+            by_path.setdefault(finding.path, []).append(finding.code)
+        expected = {"PATH001", "PATH002", "RUNTIME001", "HOOK001", "ARGS001", "CONN001", "SECRET001"}
+        self.assertEqual(set(by_path["signals.md"]), expected)
+        self.assertIn("PATH002", audit._lexical_codes("C:\\Users\\alice\\", ".txt"))
+        self.assertNotIn("HOOK001", by_path.get("lower.md", ()))
+        args_paths = {finding.path for finding in result.findings if finding.code == "ARGS001"}
+        self.assertEqual(args_paths, {"signals.md", "run.sh", "shell.md"})
+        self.assertEqual(len(by_path["signals.md"]), len(set(by_path["signals.md"])))
+
+    def test_file_limit_encoding_read_failure_extensions_and_coverage(self):
+        folder = self.skill(".", "files")
+        mode = self.skill("mode", "mode"); mode_file = mode / "run.py"; mode_file.write_text("safe"); mode_file.chmod(0o700)
+        for suffix in audit.ELIGIBLE - {".md"}:
+            (folder / f"ok{suffix}").write_text("safe")
+        (folder / "exact.txt").write_bytes(b"a" * audit.LIMIT)
+        (folder / "large.py").write_bytes(b"a" * (audit.LIMIT + 1))
+        (folder / "binary.json").write_bytes(b"\xff"); (folder / "denied.ts").write_text("safe")
+        executable_py = folder / "executable.py"; executable_py.write_text("safe"); executable_py.chmod(0o700)
+        (folder / "tool.go").write_text("secret"); executable = folder / "tool"; executable.write_text("token"); executable.chmod(0o700)
+        real = audit._read_file
+        def fail_one(path):
+            return (None, None) if path.name == "denied.ts" else real(path)
+        with mock.patch.object(audit, "_read_file", side_effect=fail_one):
+            result, mode_result = audit.analyze_source(self.root.resolve())
+        self.assertEqual((mode_result.status, [item.code for item in mode_result.findings]), ("review", ["COVERAGE001"]))
+        failures = [item for item in result.findings if item.code == "FILE001"]
+        self.assertEqual({item.path for item in failures}, {"binary.json", "denied.ts", "large.py"})
+        self.assertTrue(all(item.file_id for item in failures)); self.assertEqual([item.code for item in result.findings].count("COVERAGE001"), 1)
+        files = {item.path: item for item in result.files}
+        self.assertEqual(len(files["exact.txt"].content), audit.LIMIT)
+        self.assertTrue(audit.ELIGIBLE <= {Path(path).suffix for path in files})
+        self.assertFalse({"executable.py", "tool.go", "tool"} & files.keys())
 
 if __name__ == "__main__":
     unittest.main()
