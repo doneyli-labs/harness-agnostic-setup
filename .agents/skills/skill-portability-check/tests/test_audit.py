@@ -7,12 +7,14 @@ from cases_foundation import (
     ValidationAndLedgerTests,
 )
 from cases_input_policy import InputPolicyTests
+from cases_traversal import TraversalTests
 
 __all__ = (
     "CapabilityGateTests",
     "DescriptorWalkTests",
     "ValidationAndLedgerTests",
     "InputPolicyTests",
+    "TraversalTests",
 )
 
 

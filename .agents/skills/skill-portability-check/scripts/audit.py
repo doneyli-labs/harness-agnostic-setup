@@ -99,6 +99,7 @@ def _capable():
         and callable(getattr(os, "fsync", None))
         and bool(getattr(os, "O_DIRECTORY", 0))
         and bool(getattr(os, "O_NOFOLLOW", 0))
+        and bool(getattr(os, "O_NONBLOCK", 0))
         and pwd is not None
         and callable(getattr(pwd, "getpwuid", None))
         and callable(getattr(os, "getuid", None))
@@ -238,6 +239,88 @@ def _input_preflight(args, ledger=None):
     except OperationalError as error:
         owner.cleanup(error)
     _close_inputs(owner, records)
+
+
+EXCLUDED_DIRECTORIES = frozenset((
+    ".git", ".hg", ".svn", "__pycache__", ".cache", ".mypy_cache",
+    ".pytest_cache", "node_modules", "vendor", "dist", "build", "target",
+    "credentials", "secrets"))
+ELIGIBLE_SUFFIXES = (
+    ".md", ".txt", ".sh", ".py", ".js", ".ts", ".json", ".toml", ".yaml", ".yml")
+
+
+def _scan_dir(directory):
+    try:
+        with os.scandir(directory) as entries:
+            names = tuple(_safe_basename(entry.name) for entry in entries)
+    except (OSError, UnicodeError, ValueError):
+        raise OperationalError("PATH_UNSAFE") from None
+    return tuple(sorted(names))
+
+
+def _open_file_at(ledger, parent, name):
+    name = _safe_basename(name)
+    before = _stat_at(parent, name)
+    if not stat.S_ISREG(before.st_mode):
+        raise OperationalError("PATH_UNSAFE")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+    try:
+        child = ledger.own(os.open(name, flags, dir_fd=parent))
+        opened = os.fstat(child)
+    except (OSError, UnicodeError, ValueError):
+        raise OperationalError("PATH_UNSAFE") from None
+    after = _stat_at(parent, name)
+    identities = {_identity(before), _identity(opened), _identity(after)}
+    if not stat.S_ISREG(opened.st_mode) or len(identities) != 1:
+        raise OperationalError("PATH_RACE")
+    return child, _identity(opened)
+
+
+def _read_file_at(ledger, parent, name):
+    name = _safe_basename(name)
+    try:
+        descriptor, _ = _open_file_at(ledger, parent, name)
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        ledger.close(descriptor)
+        return b"".join(chunks)
+    except OperationalError as error:
+        ledger.cleanup(error)
+    except (OSError, UnicodeError, ValueError):
+        ledger.cleanup(OperationalError("PATH_UNSAFE"))
+
+
+def _walk_entries(ledger, directory, prefix=()):
+    events = []
+    for name in _scan_dir(directory):
+        metadata = _stat_at(directory, name)
+        relative = (*prefix, name)
+        if stat.S_ISLNK(metadata.st_mode):
+            events.append(("PATH003", relative, None))
+        elif stat.S_ISDIR(metadata.st_mode):
+            if name in EXCLUDED_DIRECTORIES:
+                events.append(("excluded", relative, None))
+                continue
+            child, _ = _open_dir_at(ledger, directory, name)
+            events.extend(_walk_entries(ledger, child, relative))
+            ledger.close(child)
+        elif stat.S_ISREG(metadata.st_mode) and name.endswith(ELIGIBLE_SUFFIXES):
+            events.append(("file", relative,
+                           _read_file_at(ledger, directory, name)))
+    return events
+
+
+def _traverse_at(ledger, directory):
+    try:
+        return tuple(_walk_entries(ledger, directory))
+    except OperationalError as error:
+        ledger.cleanup(error)
+    except (OSError, UnicodeError, ValueError):
+        ledger.cleanup(OperationalError("PATH_UNSAFE"))
 
 
 def _parser():
