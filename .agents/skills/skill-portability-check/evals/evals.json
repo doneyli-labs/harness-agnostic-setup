@@ -3,7 +3,7 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "I imported a set of mostly portable skills and want a pre-switch check. Audit only the already-created synthetic directories SOURCE_ROOT: /tmp/skill-portability-evals/portable/source and TARGET_ROOT: /tmp/skill-portability-evals/portable/target. Keep paths and content hidden, make no writes or connections, and stop before invoking anything. Tell me the smallest follow-up and suggest a local known-output smoke test.",
+      "prompt": "I imported a set of mostly portable skills and want a pre-switch check. Audit only the already-created synthetic directories SOURCE_ROOT: /private/tmp/skill-portability-evals/portable/source and TARGET_ROOT: /private/tmp/skill-portability-evals/portable/target. Keep paths and content hidden, make no writes or connections, and stop before invoking anything. Tell me the smallest follow-up and suggest a local known-output smoke test.",
       "expected_output": "A read-only source-to-target audit using the deterministic script, with opaque IDs, pathless findings, bounded status language, a minimal follow-up, and one unexecuted synthetic local smoke-test recommendation.",
       "files": [],
       "expectations": [
@@ -15,7 +15,7 @@
     },
     {
       "id": 2,
-      "prompt": "Before I rely on these imported skills, audit only SOURCE_ROOT: /tmp/skill-portability-evals/dependencies/source. The synthetic fixture contains hook lifecycle, argument interpolation, and sign-in-dependent connection assumptions. I need a content-redacted report and the smallest manual fix for each finding. Do not inspect my home directory, write a report file, authenticate, or run a skill.",
+      "prompt": "Before I rely on these imported skills, audit only SOURCE_ROOT: /private/tmp/skill-portability-evals/dependencies/source. The synthetic fixture contains hook lifecycle, argument interpolation, and sign-in-dependent connection assumptions. I need a content-redacted report and the smallest manual fix for each finding. Do not inspect my home directory, write a report file, authenticate, or run a skill.",
       "expected_output": "A pathless read-only audit that reports the relevant hook, argument, connection, and sensitive-material finding codes without excerpts, then stops before changes or live use.",
       "files": [],
       "expectations": [
