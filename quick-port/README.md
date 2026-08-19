@@ -4,6 +4,8 @@ Bring supported Claude setup and recent work into Codex, then check eligible
 imported skill text files for common Claude-specific assumptions before relying
 on one important workflow.
 
+This is a guide, not a one-click converter or an interoperability guarantee.
+
 ## 1. Check authorization and destination risk
 
 Import only material you are authorized to place in the destination account or
@@ -25,7 +27,10 @@ destination mutation is unacceptable, stop here.
 
 This guide is based on OpenAI's current
 [import documentation](https://learn.chatgpt.com/docs/import). Review it before
-you import because supported items and interface labels can change.
+you import because supported items and interface labels can change. Official
+import moves selected supported items; the auditor later in this guide moves
+nothing. If neither documented import surface is available, stop. Do not replace
+it with a bulk-copy workaround.
 
 ## 3. Run the official import
 
@@ -92,13 +97,17 @@ python3 .agents/skills/skill-portability-check/scripts/audit.py \
   --source '<SOURCE_ROOT>' --target '<TARGET_ROOT>' --format markdown
 ```
 
+The auditor is filesystem-read-only and emits its report to stdout only.
+`--output` is reserved and unsupported, so do not add it to either command.
+
 For use in another location, supported skill destinations are
 `<repo>/.agents/skills` and `$HOME/.agents/skills`. If a same-name
 `skill-portability-check` skill already exists, do not copy or overwrite it.
-Run the auditor directly from this clone instead. Codex normally detects skill
-changes automatically; if a newly copied skill does not appear, restart Codex
-as the current [skills documentation](https://learn.chatgpt.com/docs/build-skills)
-permits.
+Run the auditor directly from this clone instead. This same-name warning applies
+only to the audit skill; it does not authorize copying, converting, or
+overwriting imported skills. Codex normally detects skill changes automatically;
+if a newly copied skill does not appear, restart Codex as the current
+[skills documentation](https://learn.chatgpt.com/docs/build-skills) permits.
 
 By default the report hides paths and uses opaque skill/file IDs. The optional
 `--show-paths` report is sensitive. The status `portable` means only that the
@@ -167,3 +176,7 @@ instruction bodies in
 and constraints in the [`schema`](../schemas/role-catalog.schema.json). Render
 native files from those sources and detect drift instead of maintaining copies
 by hand.
+
+If this guide helped you resume work now, subscribe to
+[Signal over Noise](https://doneyli.substack.com/subscribe) for the upcoming
+advanced Build Log on hardening that setup.

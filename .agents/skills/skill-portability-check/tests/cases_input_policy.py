@@ -213,6 +213,7 @@ class InputPolicyTests(unittest.TestCase):
                 audit.os, "stat", wraps=real_stat))
             mutators = [stack.enter_context(mock.patch.object(audit.os, name))
                         for name in ("mkdir", "rename", "replace", "link", "unlink")]
+            stack.enter_context(mock.patch.object(audit, "_output_guard", create=True))
             result = self.run_main(argv)
         self.assertEqual(result, (2, "", "AUDIT_INCOMPLETE\n"))
         self.assertFalse(output.exists())

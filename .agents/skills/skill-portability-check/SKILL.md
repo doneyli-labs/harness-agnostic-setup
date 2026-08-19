@@ -17,7 +17,9 @@ agent configuration.
   filesystem root, the user's home directory, or an ancestor of home.
 - Treat the source as authoritative. A target is optional and never a reason to
   edit the source or target.
-- Do not copy, create, edit, move, or delete files. Do not pass `--output`.
+- No supported mode creates, modifies, or deletes any filesystem object.
+  Completed reports are emitted to stdout only. `--output` is reserved and
+  unsupported; this skill never passes it.
 - Do not authenticate, connect services, inspect environment values, or invoke
   an imported skill, command, hook, plugin, or tool.
 - Keep paths hidden unless the user explicitly requests the sensitive

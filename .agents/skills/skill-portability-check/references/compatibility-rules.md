@@ -12,10 +12,10 @@ every non-symlink regular file under that skill with its eligible scanner. It
 does not guarantee that imported runtime behavior, connections, or global setup
 work. Any coverage gap keeps the result at `review`.
 
-The workflow never copies, edits, moves, or deletes audited files. It never
-authenticates, connects, or invokes imported tools. Without `--output`, the
-auditor writes its one report to stdout and does not write a file. This skill
-always uses that no-output mode.
+No supported mode creates, modifies, or deletes any filesystem object. The
+workflow never authenticates, connects, or invokes imported tools. Completed
+reports are emitted to stdout only. `--output` is reserved and unsupported,
+and this skill never passes it.
 
 ## Finding glossary
 
@@ -37,12 +37,14 @@ paths.
 | `ARGS001` | review | Argument or command interpolation appears. | Replace it with explicit validated input. |
 | `CONN001` | review | Connection or environment-dependent setup appears. | Reconfigure it manually; do not copy values. |
 | `SECRET001` | review | Sensitive-material vocabulary appears. | Remove embedded values and use approved setup. |
-| `FILE001` | review | A file could not be safely read or decoded. | Review or repair it manually, then reaudit the explicit root. |
+| `FILE001` | review | After the full stable-open descriptor/type/identity gate, bounded `os.read` failed, content exceeded 1 MiB, or strict UTF-8 decoding failed. | Review or repair it manually, then reaudit the explicit root. |
 | `COVERAGE001` | review | An excluded subtree/file or unsupported regular file exists. | Review that gap separately; do not infer portability. |
 | `COMPARE001` | review | No unique target match exists. | Install or identify the intended target skill manually. |
 | `COMPARE002` | review | Matched source and target file digests differ. | Review the target difference; do not overwrite automatically. |
 
-Target-side read failures are pathless. When no target is supplied, no
+An `os.open`, type, identity, `fstat`, or post-stat failure is operational
+`PATH_UNSAFE`/`PATH_RACE`, not `FILE001`. Target-side `FILE001` is pathless
+only for that post-stable-open boundary. When no target is supplied, no
 comparison code appears because no comparison was attempted.
 
 ## Official import limits
