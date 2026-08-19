@@ -10,11 +10,11 @@ bindings in this repository to define roles once and render each native shape.
 A copy-pasteable template for defining an AI coding agent **once** and running it
 in more than one harness (Claude Code, Codex, and anything you add next).
 
-This is the build-along companion to the *Signal over Noise* issue
-**"I Compile My AI Agents. I Don't Copy Them."** It ships the shape, not the
-private machinery: the canonical catalog, the per-harness bindings, and the
-schema. The compiler/renderer, installer, and drift doctor described in the
-issue stay in a private repo. You have everything here to build your own.
+This is the build-along companion to an upcoming advanced *Signal over Noise*
+Build Log. It ships the shape, not the private machinery: the canonical
+catalog, the per-harness bindings, and the schema. The compiler/renderer,
+installer, and drift doctor described there stay in a private repo. You have
+everything here to build your own.
 
 ## The idea in one line
 
@@ -79,9 +79,9 @@ Two things worth adding once it works:
 > A **drift check** that re-renders every role and diffs it against what is
 > actually installed, so a hand-edit gets caught.
 
-> A **transactional install** (back up the current files, write, verify, and
-> roll back on any failure) so a half-applied update can never leave your two
-> harnesses disagreeing.
+> A **transactional install** that backs up current files, writes, and verifies
+> the result, then records whether a restore was actually verified if something
+> fails. That reduces half-applied-update risk; it is not a blanket guarantee.
 
 ## Model names
 
