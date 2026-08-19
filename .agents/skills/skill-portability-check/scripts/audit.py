@@ -334,11 +334,17 @@ def _parser():
 PARSER = _parser()
 
 
+def _output_guard(args):
+    if args.output is not None:
+        raise OperationalError("SAFE_OUTPUT_UNAVAILABLE")
+
+
 def main(argv=None):
     try:
         args = PARSER.parse_args(argv)
         if not _capable():
             raise OperationalError("SAFE_IO_UNAVAILABLE")
+        _output_guard(args)
         _input_preflight(args)
         raise OperationalError("AUDIT_INCOMPLETE")
     except OperationalError as error:
