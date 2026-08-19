@@ -7,6 +7,7 @@ from cases_foundation import (
     ValidationAndLedgerTests,
 )
 from cases_core_analysis import CoreAnalysisTests
+from cases_core_bootstrap import CoreBootstrapTests
 from cases_input_policy import InputPolicyTests
 from cases_output_refusal import OutputRefusalTests
 from cases_traversal import TraversalTests
@@ -14,6 +15,7 @@ from cases_traversal import TraversalTests
 __all__ = (
     "CapabilityGateTests",
     "CoreAnalysisTests",
+    "CoreBootstrapTests",
     "DescriptorWalkTests",
     "ValidationAndLedgerTests",
     "InputPolicyTests",

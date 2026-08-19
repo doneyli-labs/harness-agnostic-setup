@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed command shell for the skill portability auditor."""
 import argparse
+import importlib.util
 import os
 import stat
 import sys
@@ -339,12 +340,37 @@ def _output_guard(args):
         raise OperationalError("SAFE_OUTPUT_UNAVAILABLE")
 
 
+def _load_core():
+    sys.dont_write_bytecode = True
+    name = "skill_portability_audit_core"
+    absent = object()
+    previous = sys.modules.get(name, absent)
+    failures = (ImportError, OSError, SyntaxError, UnicodeError, ValueError,
+                TypeError, AttributeError, RuntimeError)
+    try:
+        path = os.path.join(os.path.dirname(__file__), "audit_core.py")
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("core loader unavailable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except failures:
+        raise OperationalError("CORE_LOAD_UNAVAILABLE") from None
+    finally:
+        if previous is absent:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
+    return module
+
+
 def main(argv=None):
     try:
         args = PARSER.parse_args(argv)
         if not _capable():
             raise OperationalError("SAFE_IO_UNAVAILABLE")
         _output_guard(args)
+        _load_core()
         _input_preflight(args)
         raise OperationalError("AUDIT_INCOMPLETE")
     except OperationalError as error:
