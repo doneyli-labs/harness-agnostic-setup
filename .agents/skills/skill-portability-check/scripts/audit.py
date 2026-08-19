@@ -220,7 +220,8 @@ def _close_inputs(ledger, records):
 
 def _input_preflight(args, ledger=None):
     owner = FdLedger() if ledger is None else ledger
-    records = []
+    records, inventories = [], None
+    core = getattr(args, "_core", None) if getattr(args, "output", None) is None else None
     try:
         home = _open_input("home", _home_path(), owner)
         records.append(("home", *home))
@@ -235,9 +236,18 @@ def _input_preflight(args, ledger=None):
         for label, _, trail in records[1:]:
             if trail[-1] in guarded:
                 raise OperationalError(f"<{label}> PATH_UNSAFE")
+        if core is not None:
+            values = []
+            for label, descriptor, _ in records[1:]:
+                try:
+                    values.append(_inventory_at(owner, descriptor, core))
+                except OperationalError as error:
+                    raise _labeled(label, error) from None
+            inventories = (values[0], values[1] if len(values) == 2 else None)
     except OperationalError as error:
         owner.cleanup(error)
     _close_inputs(owner, records)
+    return inventories
 
 
 EXCLUDED_DIRECTORIES = frozenset((
@@ -464,9 +474,14 @@ def main(argv=None):
         if not _capable():
             raise OperationalError("SAFE_IO_UNAVAILABLE")
         _output_guard(args)
-        _load_core()
-        _input_preflight(args)
-        raise OperationalError("AUDIT_INCOMPLETE")
+        core = _load_core()
+        args._core = core
+        inventories = _input_preflight(args)
+        if not isinstance(inventories, tuple) or len(inventories) != 2:
+            raise OperationalError("AUDIT_INCOMPLETE")
+        report = core.build_report(*inventories, show_paths=args.show_paths)
+        sys.stdout.write(core.serialize_report(report, args.format))
+        return core.report_exit(report)
     except OperationalError as error:
         sys.stderr.write(f"{error}\n")
         return 2
