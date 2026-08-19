@@ -35,8 +35,7 @@ class CapabilityGateTests(unittest.TestCase):
         self.assertTrue(audit._capable())
 
     def test_each_required_primitive_is_individually_blocking(self):
-        names = ("open", "stat", "link", "unlink", "scandir",
-                 "fstat", "fsync", "getuid")
+        names = ("open", "stat", "scandir", "fstat", "getuid")
         for name in names:
             with self.subTest(name=name), mock.patch.object(audit.os, name, None):
                 self.assertFalse(audit._capable())
@@ -44,15 +43,13 @@ class CapabilityGateTests(unittest.TestCase):
             self.assertFalse(audit._capable())
         with mock.patch.object(audit, "pwd", None):
             self.assertFalse(audit._capable())
+        for name in ("link", "unlink", "fsync"):
+            with self.subTest(former_capability=name), mock.patch.object(audit.os, name, None):
+                self.assertTrue(audit._capable())
 
     def test_each_required_capability_membership_is_blocking(self):
-        cases = (
-            ("supports_dir_fd", "open"), ("supports_dir_fd", "stat"),
-            ("supports_dir_fd", "link"),
-            ("supports_dir_fd", "unlink"), ("supports_fd", "scandir"),
-            ("supports_follow_symlinks", "stat"),
-            ("supports_follow_symlinks", "link"),
-        )
+        cases = (("supports_dir_fd", "open"), ("supports_dir_fd", "stat"),
+                 ("supports_fd", "scandir"), ("supports_follow_symlinks", "stat"))
         for container, name in cases:
             reduced = set(getattr(audit.os, container))
             reduced.discard(getattr(audit.os, name))
@@ -61,7 +58,7 @@ class CapabilityGateTests(unittest.TestCase):
                     self.assertFalse(audit._capable())
 
     def test_each_required_flag_is_individually_blocking(self):
-        for name in ("O_DIRECTORY", "O_NOFOLLOW"):
+        for name in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK"):
             with self.subTest(name=name), mock.patch.object(audit.os, name, 0):
                 self.assertFalse(audit._capable())
 
@@ -76,21 +73,19 @@ class CapabilityGateTests(unittest.TestCase):
         with mock.patch("builtins.__import__", side_effect=missing):
             without_pwd = load_module("audit_without_pwd")
         self.assertIsNone(without_pwd.pwd)
-        self.assertEqual(self.run_main(without_pwd),
-                         (2, "", "SAFE_IO_UNAVAILABLE\n"))
+        self.assertEqual(self.run_main(without_pwd), (2, "", "SAFE_IO_UNAVAILABLE\n"))
 
         def unrelated(module_name, *args, **kwargs):
             if module_name == "pwd":
                 raise ModuleNotFoundError("dependency unavailable", name="dependency")
             return original_import(module_name, *args, **kwargs)
 
-        with mock.patch("builtins.__import__", side_effect=unrelated):
-            with self.assertRaises(ModuleNotFoundError):
-                load_module("audit_unrelated_import_failure")
+        with mock.patch("builtins.__import__", side_effect=unrelated), \
+                self.assertRaises(ModuleNotFoundError):
+            load_module("audit_unrelated_import_failure")
 
     def test_unsupported_gate_is_exact_and_precedes_later_work(self):
-        names = ("open", "stat", "link", "unlink", "scandir",
-                 "fstat", "fsync", "getuid", "mkdir", "rename", "replace")
+        names = "open stat link unlink scandir fstat fsync getuid mkdir rename replace".split()
         with tempfile.TemporaryDirectory() as temporary:
             output = pathlib.Path(temporary) / "secret-output"
             with ExitStack() as stack:
@@ -99,9 +94,8 @@ class CapabilityGateTests(unittest.TestCase):
                             for name in names}
                 home = stack.enter_context(mock.patch.object(audit.pwd, "getpwuid"))
                 file_open = stack.enter_context(mock.patch("builtins.open"))
-                result = self.run_main(argv=["--source", "secret-path",
-                                             "--target", "secret-target",
-                                             "--output", str(output)])
+                result = self.run_main(argv=["--source", "secret-path", "--target",
+                                             "secret-target", "--output", str(output)])
             self.assertFalse(output.exists())
         self.assertEqual(result, (2, "", "SAFE_IO_UNAVAILABLE\n"))
         self.assertNotIn("secret", result[2])
@@ -112,23 +106,18 @@ class CapabilityGateTests(unittest.TestCase):
         file_open.assert_not_called()
 
     def test_supported_gate_does_not_access_home_paths_or_output(self):
-        names = ("open", "stat", "link", "unlink", "scandir",
-                 "fstat", "fsync", "getuid")
+        names = "open stat link unlink scandir fstat fsync getuid".split()
         originals = {name: getattr(audit.os, name) for name in names}
-        observed = {name: mock.Mock(wraps=function)
-                    for name, function in originals.items()}
+        observed = {name: mock.Mock(wraps=function) for name, function in originals.items()}
         with tempfile.TemporaryDirectory() as temporary:
             root, output = pathlib.Path(temporary), pathlib.Path(temporary) / "report.json"
             with ExitStack() as stack:
                 for name, function in observed.items():
                     stack.enter_context(mock.patch.object(audit.os, name, function))
-                stack.enter_context(mock.patch.object(
-                    audit.os, "supports_dir_fd",
-                    {observed[name] for name in ("open", "stat", "link", "unlink")}))
-                stack.enter_context(mock.patch.object(
-                    audit.os, "supports_fd", {observed["scandir"]}))
-                stack.enter_context(mock.patch.object(
-                    audit.os, "supports_follow_symlinks", {observed["stat"], observed["link"]}))
+                stack.enter_context(mock.patch.object(audit.os, "supports_dir_fd", {observed[name] for name in ("open", "stat")}))
+                stack.enter_context(mock.patch.object(audit.os, "supports_fd", {observed["scandir"]}))
+                stack.enter_context(mock.patch.object(audit.os, "supports_follow_symlinks", {observed["stat"]}))
+                stack.enter_context(mock.patch.object(audit, "_output_guard", create=True))
                 stack.enter_context(mock.patch.object(audit, "_input_preflight", create=True))
                 home = stack.enter_context(mock.patch.object(audit.pwd, "getpwuid"))
                 file_open = stack.enter_context(mock.patch("builtins.open"))
@@ -145,6 +134,26 @@ class CapabilityGateTests(unittest.TestCase):
         home.assert_not_called()
         file_open.assert_not_called()
 
+    def test_future_main_orders_gate_guard_preflight_without_access(self):
+        events, args = [], mock.Mock(spec=[])
+        def candidate(parsed):
+            if not audit._capable():
+                raise audit.OperationalError("SAFE_IO_UNAVAILABLE")
+            audit._output_guard(parsed)
+            audit._input_preflight(parsed)
+
+        with ExitStack() as stack:
+            names = "open stat scandir fstat getuid link unlink fsync mkdir rename replace read".split()
+            filesystem = [stack.enter_context(mock.patch.object(audit.os, name)) for name in names]
+            filesystem += [stack.enter_context(mock.patch.object(audit.pwd, "getpwuid")), stack.enter_context(mock.patch("builtins.open"))]
+            stack.enter_context(mock.patch.object(audit, "_capable", side_effect=lambda: events.append("gate") or True))
+            stack.enter_context(mock.patch.object(audit, "_output_guard", create=True, side_effect=lambda _: events.append("guard")))
+            stack.enter_context(mock.patch.object(audit, "_input_preflight", side_effect=lambda _: events.append("preflight")))
+            candidate(args)
+        self.assertEqual(events, ["gate", "guard", "preflight"])
+        for function in filesystem:
+            function.assert_not_called()
+
     def test_parser_surface_is_path_free_and_requires_valid_source(self):
         invalid = (
             [], ["--source"], ["--source", "private", "--format", "yaml"],
@@ -158,8 +167,7 @@ class CapabilityGateTests(unittest.TestCase):
                 self.assertNotIn("private", result[2])
                 self.assertNotIn("Traceback", result[2])
         options = ("--source", "--target", "--format", "--show-paths", "--output")
-        prefixes = tuple((option, option[:length]) for option in options
-                         for length in range(3, len(option)))
+        prefixes = tuple((option, option[:length]) for option in options for length in range(3, len(option)))
         self.assertEqual(len(prefixes), 29)
         for option, prefix in prefixes:
             argv = [] if option == "--source" else ["--source", "private-source"]
@@ -184,8 +192,7 @@ class ValidationAndLedgerTests(unittest.TestCase):
                  "bad\u200b", "bad\ud800")
         api_names = ("open", "stat", "fstat", "readlink", "scandir", "getcwd")
         with ExitStack() as stack:
-            observed = [stack.enter_context(mock.patch.object(audit.os, name))
-                        for name in api_names]
+            observed = [stack.enter_context(mock.patch.object(audit.os, name)) for name in api_names]
             for path in paths:
                 with self.subTest(kind="path", value=repr(path)):
                     self.assertRaises(audit.OperationalError, audit._path_plan, path)
@@ -194,29 +201,22 @@ class ValidationAndLedgerTests(unittest.TestCase):
                     self.assertRaises(audit.OperationalError, audit._safe_basename, name)
             with mock.patch.object(audit.os, "altsep", "\\"):
                 for name in ("\\", "a\\b"):
-                    self.assertRaises(audit.OperationalError,
-                                      audit._safe_basename, name)
+                    self.assertRaises(audit.OperationalError, audit._safe_basename, name)
                 for path in ("a\\..\\b", "a\\\\b"):
-                    self.assertRaises(audit.OperationalError,
-                                      audit._path_plan, path)
+                    self.assertRaises(audit.OperationalError, audit._path_plan, path)
         for function in observed:
             function.assert_not_called()
 
     def test_valid_absolute_relative_and_altsep_plans_preserve_order(self):
         api_names = ("open", "stat", "fstat", "readlink", "scandir", "getcwd")
         with ExitStack() as stack:
-            observed = [stack.enter_context(mock.patch.object(audit.os, name))
-                        for name in api_names]
-            self.assertEqual(audit._path_plan("/alpha/beta"),
-                             (os.sep, ("alpha", "beta")))
-            self.assertEqual(audit._path_plan("alpha/beta"),
-                             (".", ("alpha", "beta")))
+            observed = [stack.enter_context(mock.patch.object(audit.os, name)) for name in api_names]
+            self.assertEqual(audit._path_plan("/alpha/beta"), (os.sep, ("alpha", "beta")))
+            self.assertEqual(audit._path_plan("alpha/beta"), (".", ("alpha", "beta")))
             self.assertEqual(audit._path_plan(os.sep), (os.sep, ()))
             with mock.patch.object(audit.os, "altsep", "\\"):
-                self.assertEqual(audit._path_plan("\\alpha\\beta"),
-                                 (os.sep, ("alpha", "beta")))
-                self.assertEqual(audit._path_plan("alpha\\beta"),
-                                 (".", ("alpha", "beta")))
+                self.assertEqual(audit._path_plan("\\alpha\\beta"), (os.sep, ("alpha", "beta")))
+                self.assertEqual(audit._path_plan("alpha\\beta"), (".", ("alpha", "beta")))
         for function in observed:
             function.assert_not_called()
 

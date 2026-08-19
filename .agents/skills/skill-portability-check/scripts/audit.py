@@ -86,17 +86,15 @@ def _member(function, capability):
 
 def _capable():
     functions = {name: getattr(os, name, None) for name in
-                 ("open", "stat", "link", "unlink", "scandir")}
+                 ("open", "stat", "scandir")}
     dir_fd = getattr(os, "supports_dir_fd", ()) or ()
     fd = getattr(os, "supports_fd", ()) or ()
     follow = getattr(os, "supports_follow_symlinks", ()) or ()
     return (
-        all(_member(functions[name], dir_fd)
-            for name in ("open", "stat", "link", "unlink"))
+        all(_member(functions[name], dir_fd) for name in ("open", "stat"))
         and _member(functions["scandir"], fd)
-        and all(_member(functions[name], follow) for name in ("stat", "link"))
+        and _member(functions["stat"], follow)
         and callable(getattr(os, "fstat", None))
-        and callable(getattr(os, "fsync", None))
         and bool(getattr(os, "O_DIRECTORY", 0))
         and bool(getattr(os, "O_NOFOLLOW", 0))
         and bool(getattr(os, "O_NONBLOCK", 0))
