@@ -1,4 +1,6 @@
 """Pure, redacted content analysis for the skill portability auditor."""
+import hashlib
+import json
 import re
 import unicodedata
 
@@ -125,3 +127,116 @@ def metadata_equal(first, second, key="name"):
     left, right = (_metadata(text) for text in decoded)
     index = 0 if key == "name" else 1
     return left[index] is not None and left[index] == right[index]
+
+
+def _has(record, code):
+    return any(finding[0] == code for finding in record["findings"])
+
+
+def _framed_digest(record):
+    digest = hashlib.sha256()
+    files = tuple(sorted(record["files"]))
+    digest.update(len(files).to_bytes(8, "big"))
+    for path, data, _ in files:
+        path_bytes, content = path.encode("utf-8"), bytes(data)
+        digest.update(len(path_bytes).to_bytes(8, "big"))
+        digest.update(path_bytes)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.digest()
+
+
+def _target_match(source, targets):
+    if source["name_valid"]:
+        if _has(source, "META004"):
+            return None, "source"
+        matches = [target for target in targets if target["name_valid"]
+                   and metadata_equal(source["skill_bytes"], target["skill_bytes"])]
+        if len(matches) > 1:
+            return None, "target"
+    else:
+        matches = [target for target in targets if not target["name_valid"]
+                   and target["key"] == source["key"]]
+    return (matches[0], None) if len(matches) == 1 else (None, None)
+
+
+def _skill_result(source, targets, supplied, show_paths, skill_id):
+    paths = sorted(path for path, _, _ in source["files"])
+    file_ids = {path: f"F{index:03d}" for index, path in enumerate(paths, 1)}
+    findings = set()
+    for code, path, severity in source["findings"]:
+        file_id = None if path is None or code == "PATH003" else file_ids.get(path)
+        findings.add((code, "source", file_id, path if file_id else None, severity))
+    match, duplicate = _target_match(source, targets) if supplied else (None, None)
+    if supplied and duplicate == "target":
+        findings.add(("META004", "target", None, None, "blocked"))
+    elif supplied and duplicate != "source":
+        if match is None:
+            findings.add(("COMPARE001", "comparison", None, None, "review"))
+        else:
+            for code, _, severity in match["findings"]:
+                findings.add((code, "target", None, None, severity))
+            if not _has(source, "FILE001") and not _has(match, "FILE001") \
+                    and _framed_digest(source) != _framed_digest(match):
+                findings.add(("COMPARE002", "comparison", None, None, "review"))
+    ordered = sorted(findings, key=lambda item: (item[0], item[1], item[3] or ""))
+    severities = {item[4] for item in ordered}
+    status = "blocked" if "blocked" in severities else "review" if ordered else "portable"
+    public = [{"code": code, "side": side, "file_id": file_id,
+               "path": path if show_paths and side == "source" else None}
+              for code, side, file_id, path, _ in ordered]
+    return {"id": skill_id, "key": source["key"] if show_paths else None,
+            "status": status, "findings": public}
+
+
+def build_report(source, target=None, show_paths=False):
+    """Build the redacted deterministic report schema from sensitive records."""
+    targets, supplied = (() if target is None else tuple(target)), target is not None
+    skills = [_skill_result(record, targets, supplied, bool(show_paths),
+                            f"S{index:03d}")
+              for index, record in enumerate(sorted(source, key=lambda item: item["key"]), 1)]
+    summary = {status: sum(skill["status"] == status for skill in skills)
+               for status in ("blocked", "portable", "review")}
+    return {"schema_version": 1, "target_supplied": supplied,
+            "summary": summary, "show_paths": bool(show_paths), "skills": skills}
+
+
+def _markdown_escape(value):
+    for character, entity in (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"),
+                              ("|", "&#124;"), ("`", "&#96;")):
+        value = value.replace(character, entity)
+    return value
+
+
+def _markdown(report):
+    lines = ["# Skill Portability Audit",
+             f"Paths: {'sensitive' if report['show_paths'] else 'hidden'}",
+             f"Target supplied: {'yes' if report['target_supplied'] else 'no'}", "",
+             "| Skill | Status | Findings |", "|---|---|---|"]
+    for skill in report["skills"]:
+        label = skill["id"]
+        if skill["key"] is not None:
+            label += f" (`{_markdown_escape(skill['key'])}`)"
+        rendered = []
+        for finding in skill["findings"]:
+            item = f"{finding['code']}@{finding['side']}:{finding['file_id'] or '-'}"
+            if finding["path"] is not None:
+                item += f" (`{_markdown_escape(finding['path'])}`)"
+            rendered.append(item)
+        lines.append(f"| {label} | {skill['status']} | {', '.join(rendered) or 'none'} |")
+    summary = report["summary"]
+    lines.extend(("", f"Summary: portable={summary['portable']} review={summary['review']} blocked={summary['blocked']}"))
+    return "\n".join(lines) + "\n"
+
+
+def serialize_report(report, output_format="markdown"):
+    if output_format == "json":
+        return json.dumps(report, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":")) + "\n"
+    if output_format != "markdown":
+        raise ValueError("unsupported report format")
+    return _markdown(report)
+
+
+def report_exit(report):
+    return 1 if report["summary"]["blocked"] else 0
