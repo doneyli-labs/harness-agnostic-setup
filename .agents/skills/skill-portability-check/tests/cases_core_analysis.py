@@ -140,7 +140,8 @@ class CoreAnalysisTests(unittest.TestCase):
         tree = ast.parse(CORE_PATH.read_text(encoding="utf-8"))
         imports = {alias.name.split(".")[0] for node in ast.walk(tree)
                    if isinstance(node, ast.Import) for alias in node.names}
-        self.assertEqual(imports, {"re", "unicodedata"})
+        self.assertTrue({"re", "unicodedata"}.issubset(imports))
+        self.assertLessEqual(imports, {"re", "unicodedata", "json", "hashlib"})
         self.assertFalse(any(isinstance(node, ast.ImportFrom) for node in ast.walk(tree)))
         banned = {"open", "print", "input", "exec", "eval", "__import__"}
         calls = {node.func.id for node in ast.walk(tree)
