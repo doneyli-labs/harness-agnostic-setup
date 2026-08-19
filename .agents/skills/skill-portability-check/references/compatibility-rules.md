@@ -12,10 +12,10 @@ every non-symlink regular file under that skill with its eligible scanner. It
 does not guarantee that imported runtime behavior, connections, or global setup
 work. Any coverage gap keeps the result at `review`.
 
-The workflow never copies, edits, moves, or deletes audited files. It never
-authenticates, connects, or invokes imported tools. Without `--output`, the
-auditor writes its one report to stdout and does not write a file. This skill
-always uses that no-output mode.
+No supported mode creates, modifies, or deletes any filesystem object. The
+workflow never authenticates, connects, or invokes imported tools. Completed
+reports are emitted to stdout only. `--output` is reserved and unsupported,
+and this skill never passes it.
 
 ## Finding glossary
 
