@@ -9,6 +9,7 @@ from cases_foundation import (
 from cases_core_analysis import CoreAnalysisTests
 from cases_core_bootstrap import CoreBootstrapTests
 from cases_input_policy import InputPolicyTests
+from cases_inventory import InventoryTests
 from cases_output_refusal import OutputRefusalTests
 from cases_traversal import TraversalTests
 
@@ -19,6 +20,7 @@ __all__ = (
     "DescriptorWalkTests",
     "ValidationAndLedgerTests",
     "InputPolicyTests",
+    "InventoryTests",
     "OutputRefusalTests",
     "TraversalTests",
 )

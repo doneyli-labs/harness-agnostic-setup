@@ -322,6 +322,100 @@ def _traverse_at(ledger, directory):
         ledger.cleanup(OperationalError("PATH_UNSAFE"))
 
 
+def _inventory_names(directory):
+    pairs, seen = [], set()
+    for raw in _scan_dir(directory):
+        name = unicodedata.normalize("NFC", raw)
+        _safe_basename(name)
+        if name in seen:
+            raise OperationalError("PATH_COLLISION")
+        seen.add(name)
+        pairs.append((name, raw))
+    return tuple(sorted(pairs))
+
+
+def _inventory_read(ledger, parent, name, limit):
+    descriptor, _ = _open_file_at(ledger, parent, name)
+    chunks, total, failed = [], 0, False
+    try:
+        while total <= limit:
+            chunk = os.read(descriptor, min(65536, limit + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+    except (OSError, ValueError):
+        failed = True
+    ledger.close(descriptor)
+    return None if failed else b"".join(chunks)
+
+
+def _inventory_dir(ledger, directory, prefix, current, records, core):
+    entries = [(name, raw, _stat_at(directory, raw))
+               for name, raw in _inventory_names(directory)]
+    if any(name == "SKILL.md" and stat.S_ISREG(info.st_mode)
+           for name, _, info in entries):
+        current = {"key": "/".join(prefix) or ".", "_prefix": prefix,
+                   "name_valid": False, "skill_bytes": None,
+                   "files": [], "findings": set()}
+        records.append(current)
+    for name, raw, info in entries:
+        full = (*prefix, name)
+        if stat.S_ISLNK(info.st_mode):
+            if current is not None:
+                current["findings"].add(("PATH003", None, "review"))
+        elif stat.S_ISDIR(info.st_mode):
+            if name in EXCLUDED_DIRECTORIES:
+                if current is not None:
+                    current["findings"].add(("COVERAGE001", None, "review"))
+                continue
+            child, _ = _open_dir_at(ledger, directory, raw)
+            _inventory_dir(ledger, child, full, current, records, core)
+            ledger.close(child)
+        elif stat.S_ISREG(info.st_mode) and current is not None:
+            path = "/".join(full[len(current["_prefix"]):])
+            if name == ".env" or name.startswith(".env.") \
+                    or not name.endswith(ELIGIBLE_SUFFIXES):
+                current["findings"].add(("COVERAGE001", None, "review"))
+                continue
+            data = _inventory_read(ledger, directory, raw, core.MAX_BYTES)
+            analysis = core.analyze_file(path, data)
+            current["files"].append((path, data, analysis))
+            if path == "SKILL.md":
+                current["skill_bytes"] = data
+                metadata = analysis["metadata"]
+                current["name_valid"] = metadata is not None and metadata[0]
+            for code, severity in analysis["findings"]:
+                current["findings"].add((code, path, severity))
+
+
+def _finalize_inventory(records, core):
+    for index, left in enumerate(records):
+        if left["name_valid"] and any(
+                index != other and right["name_valid"]
+                and core.metadata_equal(left["skill_bytes"], right["skill_bytes"])
+                for other, right in enumerate(records)):
+            left["findings"].add(("META004", "SKILL.md", "blocked"))
+    result = []
+    for record in sorted(records, key=lambda item: item["key"]):
+        result.append({"key": record["key"],
+                       "name_valid": record["name_valid"],
+                       "skill_bytes": record["skill_bytes"],
+                       "files": tuple(sorted(record["files"])),
+                       "findings": tuple(sorted(record["findings"],
+                                                key=lambda item: (item[0], item[1] or "")))})
+    return tuple(result)
+
+
+def _inventory_at(ledger, directory, core):
+    records = []
+    try:
+        _inventory_dir(ledger, directory, (), None, records, core)
+        return _finalize_inventory(records, core)
+    except OperationalError as error:
+        ledger.cleanup(error)
+
+
 def _parser():
     parser = SafeParser(add_help=False, allow_abbrev=False)
     parser.add_argument("--source", required=True)
